@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#1f5f8b">
+<title>工账 · 下载安装</title>
+<style>
+  :root { --bg:#f3f5f7; --card:#fff; --ink:#1c2530; --muted:#6b7783; --brand:#1f5f8b; --warn:#fff4e0; --warn-ink:#8a5200; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11161b; --card:#1a2128; --ink:#e8edf2; --muted:#93a0ad; --brand:#4a9bd1; --warn:#3a2a10; --warn-ink:#f0b45c; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:18px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  main { max-width:480px; margin:0 auto; padding:40px 20px 60px; }
+  h1 { font-size:36px; margin:0; text-align:center; color:var(--brand); }
+  .sub { text-align:center; color:var(--muted); margin:4px 0 28px; }
+  .card { background:var(--card); border-radius:16px; padding:20px; margin-bottom:16px; }
+  a.btn { display:block; text-align:center; background:var(--brand); color:#fff; text-decoration:none; font-size:22px; font-weight:600; padding:18px; border-radius:14px; }
+  a.btn.off { opacity:.4; pointer-events:none; }
+  .meta { text-align:center; color:var(--muted); font-size:15px; margin-top:10px; }
+  ol { padding-left:22px; margin:8px 0 0; } li { margin-bottom:8px; }
+  .warn { background:var(--warn); color:var(--warn-ink); border-radius:12px; padding:12px 14px; margin-bottom:16px; display:none; }
+  h2 { font-size:19px; margin:0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>工账</h1>
+  <p class="sub">每天记账 · 一键算工资</p>
+
+  <div class="warn" id="wx">你现在是在微信里打开的，微信不让下载。请点右上角「…」，选择「在浏览器打开」，再点下面的按钮。</div>
+
+  <div class="card">
+    <a class="btn off" id="dl" href="/app-update/apk">下载安装</a>
+    <div class="meta" id="meta">正在检查安装包…</div>
+  </div>
+
+  <div class="card">
+    <h2>怎么装（只需要这一次）</h2>
+    <ol>
+      <li>点上面的「下载安装」，下载完成后点「打开」或「安装」。</li>
+      <li>如果手机提示「不允许安装未知来源应用」，点「设置」，打开「允许」，再返回继续安装。</li>
+      <li>装好后打开「工账」，用给你的用户名和密码登录。</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>以后怎么更新</h2>
+    <p style="margin:8px 0 0">不用再来这个网页。有新版本时，打开「工账」会自动提示，点「一键更新」就行。</p>
+  </div>
+</main>
+<script>
+  if (/MicroMessenger|QQ\//i.test(navigator.userAgent)) document.getElementById("wx").style.display = "block";
+  fetch("/app-update/latest").then(r => r.ok ? r.json() : Promise.reject()).then(v => {
+    const a = document.getElementById("dl"); a.classList.remove("off");
+    document.getElementById("meta").textContent = "版本 " + (v.versionName || v.versionCode);
+  }).catch(() => { document.getElementById("meta").textContent = "安装包还没准备好，请稍后再试"; });
+</script>
+</body>
+</html>

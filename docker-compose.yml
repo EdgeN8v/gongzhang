@@ -1,0 +1,12 @@
+services:
+  gongzhang:
+    build: ./server
+    restart: unless-stopped
+    environment:
+      GZ_SECRET: ${GZ_SECRET:?set GZ_SECRET in .env to a long random string}
+      GZ_USERS: ${GZ_USERS:-}
+    volumes:
+      # database, nightly backups (data/backups) and the app builds the phones download (data/updates)
+      - ./data:/data
+    ports:
+      - "8100:8100"
