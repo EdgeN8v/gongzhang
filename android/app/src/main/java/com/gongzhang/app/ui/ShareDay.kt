@@ -4,6 +4,18 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Typeface
+import android.text.StaticLayout
+import android.text.TextPaint
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -78,7 +90,109 @@ fun dayText(d: Day, parts: Set<String>, withMoney: Boolean): String = buildStrin
     if (withMoney && "total" in parts) append("\n\n当天合计：${money(d.total)} 元")
 }
 
-/** Tick what to send, then hand the text to any app (WeChat shows up in the list) or copy it. The ticks are remembered. */
+/**
+ * The day drawn like the handwritten sheet: date on top, numbered sections, names on the left and amounts on the right,
+ * plain black on white. WeChat shows it as a picture, so the columns stay straight (text in a chat bubble cannot do that).
+ */
+private fun renderDay(d: Day, parts: Set<String>, withMoney: Boolean): Bitmap {
+    val w = 1080
+    val pad = 64f
+    val ink = 0xFF1A1A1A.toInt()
+    fun paint(size: Float, bold: Boolean = false) = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = size; color = ink; typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT }
+    val body = paint(44f); val strong = paint(44f, true); val head = paint(48f, true); val title = paint(68f, true)
+    val right = w - pad
+    val indent = pad + 36f
+
+    fun layoutOf(s: String, p: TextPaint, width: Float) = StaticLayout.Builder.obtain(s, 0, s.length, p, width.toInt()).setLineSpacing(0f, 1.1f).build()
+
+    /** One pass over the sheet; with no canvas it only measures. Returns the height used. */
+    fun pass(c: Canvas?): Float {
+        var y = 56f
+        fun gap(h: Float) { y += h }
+        fun centered(s: String, p: TextPaint) {
+            val l = layoutOf(s, p, w - 2 * pad)
+            c?.let { it.save(); it.translate(pad + (w - 2 * pad - p.measureText(s)) / 2, y); l.draw(it); it.restore() }
+            y += l.height
+        }
+        fun left(s: String, p: TextPaint, x: Float = pad) {
+            val l = layoutOf(s, p, right - x)
+            c?.let { it.save(); it.translate(x, y); l.draw(it); it.restore() }
+            y += l.height
+        }
+        fun rightLine(s: String, p: TextPaint = body) {
+            c?.drawText(s, right - p.measureText(s), y + p.textSize, p)
+            y += p.textSize * 1.35f
+        }
+        /** name on the left (wraps if long), value on the right on the first line */
+        fun row(name: String, value: String) {
+            val maxLeft = (right - indent) - (if (value.isBlank()) 0f else body.measureText(value) + 40f)
+            val l = layoutOf(name, body, maxLeft.coerceAtLeast(300f))
+            c?.let {
+                it.save(); it.translate(indent, y); l.draw(it); it.restore()
+                if (value.isNotBlank()) it.drawText(value, right - body.measureText(value), y + l.getLineBaseline(0), body)
+            }
+            y += l.height + 8f
+        }
+
+        centered(cnDate(d.date), title)
+        gap(36f)
+        var n = 0
+        for ((key, name) in PARTS) {
+            if (key !in parts || !hasPart(d, key)) continue
+            n++
+            left("$n、$name：", head)
+            gap(10f)
+            when (key) {
+                "att" -> {
+                    row("到 ${d.att.count { it.factor > 0 }} 人", if (withMoney) "工资 ${money(d.labor)} 元" else "")
+                    val half = d.att.filter { it.factor > 0 && it.factor < 1 }
+                    val off = d.att.filter { it.factor == 0.0 }
+                    if (half.isNotEmpty()) row("半天：" + half.joinToString("、") { it.name }, "")
+                    if (off.isNotEmpty()) row("没来：" + off.joinToString("、") { it.name }, "")
+                }
+                "haul" -> {
+                    d.hauls.forEach { h -> row(h.resourceName + if (h.driverName.isNotBlank()) "（${h.driverName}）" else "", "${money(h.tons)} 吨   ${h.trips} 车") }
+                    if (d.hauls.size > 1) rightLine("共 ${money(d.hauls.sumOf { it.tons })} 吨")
+                }
+                "fuel" -> {
+                    val list = d.entries.filter { it.kind == "fuel" }
+                    val prices = list.mapNotNull { it.price }.distinct()
+                    val same = prices.size == 1 && list.all { it.price != null }
+                    list.forEach { e ->
+                        row(e.resourceName.ifBlank { e.note.ifBlank { name } }, "${money(e.qty ?: 0.0)} 升" + if (withMoney && !same) "   ${money(e.amount)} 元" else "")
+                    }
+                    gap(4f)
+                    rightLine((if (withMoney && same) "${money(prices[0])} 元/升    " else "") + "共 ${money(list.sumOf { it.qty ?: 0.0 })} 升")
+                    if (withMoney) rightLine("合计：${money(list.sumOf { it.amount })} 元", strong)
+                }
+                else -> {
+                    val list = d.entries.filter { it.kind == key }
+                    list.forEach { e ->
+                        val who = if (key == "other" || key == "hired") e.note.ifBlank { name } else e.resourceName.ifBlank { e.note.ifBlank { name } } +
+                            if (e.resourceName.isNotBlank() && e.note.isNotBlank()) "（${e.note}）" else ""
+                        row(who, if (withMoney) "${money(e.amount)} 元" else "")
+                    }
+                    if (withMoney && list.size > 1) { gap(4f); rightLine("合计：${money(list.sumOf { it.amount })} 元", strong) }
+                }
+            }
+            gap(30f)
+        }
+        if (withMoney && "total" in parts) {
+            c?.drawLine(pad, y, right, y, paint(2f).apply { strokeWidth = 3f })
+            gap(22f)
+            rightLine("当天合计：${money(d.total)} 元", paint(52f, true))
+        }
+        return y + 48f
+    }
+
+    val bmp = Bitmap.createBitmap(w, pass(null).toInt(), Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    canvas.drawColor(0xFFFFFFFF.toInt())
+    pass(canvas)
+    return bmp
+}
+
+/** Tick what to send, then send the picture to WeChat (or any app), or copy the text. The ticks are remembered. */
 @Composable
 fun ShareDayDialog(vm: Vm, onDismiss: () -> Unit) {
     val context = LocalContext.current
@@ -90,7 +204,7 @@ fun ShareDayDialog(vm: Vm, onDismiss: () -> Unit) {
     }
     var withMoney by remember { mutableStateOf(prefs.getBoolean("money", true)) }
     val parts = all.filter { picked[it] == true && (it == "total" || hasPart(d, it)) }.toSet()
-    val text = dayText(d, parts, withMoney)
+    val image = remember(d, parts, withMoney) { renderDay(d, parts, withMoney) }
 
     fun remember() = prefs.edit().apply { all.forEach { putBoolean(it, picked[it] == true) }; putBoolean("money", withMoney) }.apply()
 
@@ -105,11 +219,12 @@ fun ShareDayDialog(vm: Vm, onDismiss: () -> Unit) {
                 }
                 if (PARTS.none { hasPart(d, it.first) }) Muted("这一天还没有记录。")
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
-                TickRow("当天合计金额", picked["total"] == true && withMoney, enabled = withMoney) { picked["total"] = it }
                 TickRow("带上金额", withMoney) { withMoney = it }
+                TickRow("当天合计金额", picked["total"] == true && withMoney, enabled = withMoney) { picked["total"] = it }
                 Spacer(Modifier.height(8.dp))
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
-                    Text(text, fontSize = 15.sp, modifier = Modifier.fillMaxWidth().padding(12.dp))
+                Muted("发出去的图片就是这样：")
+                Surface(shape = MaterialTheme.shapes.small, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline), modifier = Modifier.padding(top = 4.dp)) {
+                    Image(image.asImageBitmap(), contentDescription = null, contentScale = ContentScale.FillWidth, modifier = Modifier.fillMaxWidth())
                 }
             }
         },
@@ -118,20 +233,25 @@ fun ShareDayDialog(vm: Vm, onDismiss: () -> Unit) {
                 enabled = parts.any { it != "total" },
                 onClick = {
                     remember()
-                    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), "发给"))
+                    val dir = File(context.cacheDir, "share").apply { mkdirs() }
+                    val file = File(dir, "gongzhang-${d.date}.png")
+                    file.outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                    val send = Intent(Intent.ACTION_SEND).setType("image/png").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    context.startActivity(Intent.createChooser(send, "发给").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
                     onDismiss()
                 },
                 modifier = Modifier.heightIn(min = 48.dp),
-            ) { Text("发给微信等", fontSize = 17.sp) }
+            ) { Text("发图片给微信", fontSize = 17.sp) }
         },
         dismissButton = {
             Row {
                 TextButton(onClick = {
                     remember()
-                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("工账", text))
-                    vm.message = "已复制，去微信里粘贴"
+                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("工账", dayText(d, parts, withMoney)))
+                    vm.message = "文字已复制，去微信里粘贴"
                     onDismiss()
-                }) { Text("复制", fontSize = 16.sp) }
+                }) { Text("复制文字", fontSize = 16.sp) }
                 TextButton(onClick = onDismiss) { Text("取消", fontSize = 16.sp) }
             }
         },
