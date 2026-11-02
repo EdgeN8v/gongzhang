@@ -31,6 +31,7 @@ private sealed interface Dlg {
 fun TodayScreen(vm: Vm) {
     val context = LocalContext.current
     var dlg by remember { mutableStateOf<Dlg?>(null) }
+    var sharing by remember { mutableStateOf(false) }
     val d = vm.day
     val today = LocalDate.now().toString()
 
@@ -52,6 +53,7 @@ fun TodayScreen(vm: Vm) {
                         Text("当天合计", color = MaterialTheme.colorScheme.onPrimary.copy(alpha = .9f), fontSize = 15.sp)
                         if (vm.syncText.isNotBlank()) Text(vm.syncText, color = MaterialTheme.colorScheme.onPrimary.copy(alpha = .75f), fontSize = 12.sp)
                     }
+                    TextButton(onClick = { sharing = true }) { Text("分享", color = MaterialTheme.colorScheme.onPrimary, fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
                     Text(yuan(d.total), fontSize = 26.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
                 }
             }
@@ -74,6 +76,8 @@ fun TodayScreen(vm: Vm) {
         }
         }
     }
+
+    if (sharing) ShareDayDialog(vm) { sharing = false }
 
     when (val x = dlg) {
         is Dlg.EntryD -> key(x.key) { EntryDialog(vm, x.kind, x.existing, { dlg = null }) { again -> dlg = if (again) Dlg.EntryD(x.kind, null, x.key + 1) else null } }
