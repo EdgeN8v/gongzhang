@@ -53,7 +53,6 @@ fun TodayScreen(vm: Vm) {
                         Text("当天合计", color = MaterialTheme.colorScheme.onPrimary.copy(alpha = .9f), fontSize = 15.sp)
                         if (vm.syncText.isNotBlank()) Text(vm.syncText, color = MaterialTheme.colorScheme.onPrimary.copy(alpha = .75f), fontSize = 12.sp)
                     }
-                    TextButton(onClick = { sharing = true }) { Text("分享", color = MaterialTheme.colorScheme.onPrimary, fontSize = 17.sp, fontWeight = FontWeight.SemiBold) }
                     Text(yuan(d.total), fontSize = 26.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
                 }
             }
@@ -64,6 +63,9 @@ fun TodayScreen(vm: Vm) {
             if (!vm.hasData) {
                 SectionCard(null, "还没有数据") { Muted("第一次需要联网。连上网络后，在这个页面往下拉刷新。"); Spacer(Modifier.height(8.dp)); BigButton("刷新", false) { vm.refresh() } }
             } else {
+                OutlinedButton(onClick = { sharing = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+                    Text("📤 分享今天的账（发微信）", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                }
                 AttendanceCard(vm, d) { dlg = Dlg.AttD }
                 EntryCard(d, "fuel") { dlg = Dlg.EntryD("fuel", it) }
                 HaulCard(d) { dlg = Dlg.HaulD(it) }
