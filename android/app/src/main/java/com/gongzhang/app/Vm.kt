@@ -203,8 +203,8 @@ class Vm(app: Application) : AndroidViewModel(app) {
 
     fun deleteEntry(e: Entry, done: () -> Unit) { change(Ops.entryDel(e.uid)); done() }
 
-    fun saveHaul(existing: Haul?, resourceId: Int, driverId: Int?, tons: Double, trips: Int, done: () -> Unit) {
-        change(Ops.haul(existing?.uid ?: UUID.randomUUID().toString(), date, resourceId, driverId, tons, trips)); done()
+    fun saveHaul(existing: Haul?, resourceId: Int, driverId: Int?, tons: Double, trips: Int, note: String, done: () -> Unit) {
+        change(Ops.haul(existing?.uid ?: UUID.randomUUID().toString(), date, resourceId, driverId, tons, trips, note)); done()
     }
 
     fun deleteHaul(h: Haul, done: () -> Unit) { change(Ops.haulDel(h.uid)); done() }

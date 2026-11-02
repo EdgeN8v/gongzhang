@@ -71,8 +71,8 @@ object Ops {
 
     fun entryDel(uid: String) = JSONObject().put("op", "entry_del").put("uid", uid)
 
-    fun haul(uid: String, date: String, rid: Int, driverId: Int?, tons: Double, trips: Int) =
-        JSONObject().put("op", "haul").put("uid", uid).put("date", date).put("resource_id", rid).put("driver_id", driverId ?: JSONObject.NULL).put("tons", tons).put("trips", trips).put("note", "")
+    fun haul(uid: String, date: String, rid: Int, driverId: Int?, tons: Double, trips: Int, note: String = "") =
+        JSONObject().put("op", "haul").put("uid", uid).put("date", date).put("resource_id", rid).put("driver_id", driverId ?: JSONObject.NULL).put("tons", tons).put("trips", trips).put("note", note)
 
     fun haulDel(uid: String) = JSONObject().put("op", "haul_del").put("uid", uid)
 }
@@ -114,7 +114,7 @@ fun dayOf(r: Replica, date: String): Day {
     val att = r.att.filter { it.date == date && byId.containsKey(it.resourceId) }.sortedBy { order[it.resourceId] }
         .map { Att(it.resourceId, byId[it.resourceId]!!.name, byId[it.resourceId]!!.category, it.factor, it.rate, it.note) }
     val entries = r.entries.filter { it.date == date }.map { Entry(it.uid, it.date, it.kind, it.resourceId, it.resourceId?.let { id -> byId[id]?.name }.orEmpty(), it.qty, it.price, it.amount, it.note) }
-    val hauls = r.hauls.filter { it.date == date }.map { Haul(it.uid, it.resourceId, byId[it.resourceId]?.name.orEmpty(), it.driverId, it.driverId?.let { id -> byId[id]?.name }.orEmpty(), it.tons, it.trips) }
+    val hauls = r.hauls.filter { it.date == date }.map { Haul(it.uid, it.resourceId, byId[it.resourceId]?.name.orEmpty(), it.driverId, it.driverId?.let { id -> byId[id]?.name }.orEmpty(), it.tons, it.trips, it.note) }
     val labor = r2(att.sumOf { it.rate * it.factor })
     val ot = hauls.sumOf { autoOvertime(it.driverId?.let { id -> byId[id] }, it.trips) }
     return Day(date, att, entries, hauls, labor, r2(labor + entries.sumOf { it.amount } + ot))

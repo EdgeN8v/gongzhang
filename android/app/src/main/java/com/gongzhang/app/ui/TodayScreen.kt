@@ -188,7 +188,7 @@ private fun HaulCard(d: Day, open: (Haul?) -> Unit) {
         if (d.hauls.isEmpty()) Muted("今天没有")
         d.hauls.forEach { h ->
             Row(Modifier.fillMaxWidth().clickable { open(h) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) { Text(h.resourceName, fontSize = 18.sp, fontWeight = FontWeight.Medium); Muted("${h.trips} 车" + if (h.driverName.isNotBlank()) " · 司机 ${h.driverName}" else "") }
+                Column(Modifier.weight(1f)) { Text(h.resourceName, fontSize = 18.sp, fontWeight = FontWeight.Medium); Muted("${h.trips} 车" + (h.note.split(",").map { it.trim() }.filter { it.isNotEmpty() }.takeIf { it.size == h.trips && it.size > 1 }?.joinToString(" + ", "（", "）") ?: "") + if (h.driverName.isNotBlank()) " · 司机 ${h.driverName}" else "") }
                 Text("${money(h.tons)} 吨", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             }
         }
@@ -247,27 +247,36 @@ private fun HaulDialog(vm: Vm, existing: Haul?, onDismiss: () -> Unit) {
     val drivers = vm.res.filter { it.active && !it.isVehicle && it.otFree != null }   // drivers paid extra per trip over a limit
     var rid by remember { mutableStateOf(existing?.resourceId) }
     var driver by remember { mutableStateOf(existing?.driverId) }
-    var tons by remember { mutableStateOf(existing?.tons?.let(::fmtNum) ?: "") }
     var trips by remember { mutableStateOf(existing?.trips?.toString() ?: "") }
+    // One box per load. The weights are kept in the record's note ("20.5,18.3") so an edit shows them again; old records only know the total.
+    val saved = remember { existing?.note?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty() }
+    val weights = remember { mutableStateListOf<String>().also { l -> if (existing != null && saved.size == existing.trips) l.addAll(saved) } }
+    var legacyTons by remember { mutableStateOf(if (existing != null && saved.size != existing.trips) fmtNum(existing.tons) else "") }
+    val n = (trips.toIntOrNull() ?: 0).coerceIn(0, 40)
+    LaunchedEffect(n) { while (weights.size < n) weights.add(""); while (weights.size > n) weights.removeAt(weights.size - 1) }
+    val filled = weights.take(n).mapNotNull { it.toDoubleOrNull() }
+    val total = if (n == 0 || (filled.isEmpty() && legacyTons.isNotBlank())) legacyTons.toDoubleOrNull() ?: 0.0 else filled.sum()
     FormDialog(
         title = if (existing == null) "记吨数" else "修改吨数", onDismiss = onDismiss,
         onSave = {
             val r = rid
-            if (r == null) vm.message = "请选哪辆车" else vm.saveHaul(existing, r, driver, tons.toDoubleOrNull() ?: 0.0, trips.toIntOrNull() ?: 0) { onDismiss() }
+            if (r == null) vm.message = "请选哪辆车" else vm.saveHaul(existing, r, driver, Math.round(total * 100) / 100.0, n, if (n > 0 && filled.isNotEmpty()) weights.take(n).joinToString(",") { it.trim() } else "") { onDismiss() }
         },
         onDelete = existing?.let { h -> { vm.deleteHaul(h) { onDismiss() } } },
     ) {
         Muted("哪辆车")
         if (vehicles.isEmpty()) Muted("还没有车辆，请先在「人员车辆」里添加车牌") else Chips(vehicles.map { it.id as Int? to it.name }, rid) { rid = it }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NumField("吨数", tons, { tons = it }, Modifier.weight(1f))
-            NumField("几车", trips, { trips = it }, Modifier.weight(1f), decimal = false)
+        NumField("几车", trips, { trips = it }, Modifier.fillMaxWidth(), decimal = false)
+        if (n == 0) NumField("吨数（合计）", legacyTons, { legacyTons = it }, Modifier.fillMaxWidth())
+        else {
+            if (legacyTons.isNotBlank() && filled.isEmpty()) Muted("这条原来只记了合计 ${legacyTons} 吨，下面填每车的吨数；不填就保持原样。")
+            weights.take(n).forEachIndexed { i, w -> NumField("第 ${i + 1} 车（吨）", w, { weights[i] = it }, Modifier.fillMaxWidth()) }
+            Text("合计 ${money(total)} 吨", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         }
         if (drivers.isNotEmpty()) {
             Muted("谁开的（按车次算加班费的司机，可不选）")
             Chips(drivers.map { it.id as Int? to it.name }, driver) { driver = if (driver == it) null else it }
             val d = vm.res.firstOrNull { it.id == driver }
-            val n = trips.toIntOrNull() ?: 0
             if (d?.otFree != null && (d.otRate ?: 0.0) > 0 && n > d.otFree) Muted("${d.name} 超过 ${d.otFree} 车，加班费 ${yuan((n - d.otFree) * d.otRate!!)}")
         }
     }

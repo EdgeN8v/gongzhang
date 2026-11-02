@@ -19,8 +19,8 @@ android {
         applicationId = "com.gongzhang.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "0.5.2"
+        versionCode = 12
+        versionName = "0.5.3"
         buildConfigField("String", "DEFAULT_SERVER", "\"" + localProp("gongzhang.defaultServer", "http://192.168.1.10:8100/") + "\"")
         buildConfigField("String", "LAN_SERVER", "\"" + localProp("gongzhang.lanServer", "") + "\"")
     }

@@ -16,7 +16,7 @@ data class Att(val resourceId: Int, val name: String, val category: String, val 
 
 data class Entry(val uid: String, val date: String, val kind: String, val resourceId: Int?, val resourceName: String, val qty: Double?, val price: Double?, val amount: Double, val note: String)
 
-data class Haul(val uid: String, val resourceId: Int, val resourceName: String, val driverId: Int?, val driverName: String, val tons: Double, val trips: Int)
+data class Haul(val uid: String, val resourceId: Int, val resourceName: String, val driverId: Int?, val driverName: String, val tons: Double, val trips: Int, val note: String = "")
 
 data class Day(val date: String, val att: List<Att>, val entries: List<Entry>, val hauls: List<Haul>, val labor: Double, val total: Double)
 
