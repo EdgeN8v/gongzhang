@@ -94,6 +94,8 @@ fun dayText(d: Day, parts: Set<String>, withMoney: Boolean): String = buildStrin
  * The day drawn like the handwritten sheet: date on top, numbered sections, names on the left and amounts on the right,
  * plain black on white. WeChat shows it as a picture, so the columns stay straight (text in a chat bubble cannot do that).
  */
+private class Cell(val num: String, val unit: String, val numW: Float = 200f)
+
 private fun renderDay(d: Day, parts: Set<String>, withMoney: Boolean): Bitmap {
     val w = 1080
     val pad = 64f
@@ -102,6 +104,7 @@ private fun renderDay(d: Day, parts: Set<String>, withMoney: Boolean): Bitmap {
     val body = paint(44f); val strong = paint(44f, true); val head = paint(48f, true); val title = paint(68f, true)
     val right = w - pad
     val indent = pad + 36f
+    val bold = strong
 
     fun layoutOf(s: String, p: TextPaint, width: Float) = StaticLayout.Builder.obtain(s, 0, s.length, p, width.toInt()).setLineSpacing(0f, 1.1f).build()
 
@@ -123,13 +126,25 @@ private fun renderDay(d: Day, parts: Set<String>, withMoney: Boolean): Bitmap {
             c?.drawText(s, right - p.measureText(s), y + p.textSize, p)
             y += p.textSize * 1.35f
         }
-        /** name on the left (wraps if long), value on the right on the first line */
-        fun row(name: String, value: String) {
-            val maxLeft = (right - indent) - (if (value.isBlank()) 0f else body.measureText(value) + 40f)
-            val l = layoutOf(name, body, maxLeft.coerceAtLeast(300f))
+        /**
+         * Name on the left (wraps if long); the figures sit in fixed columns counted from the right edge: the unit (升 / 吨 / 车 / 元)
+         * in its own spot and the number right-aligned just before it, so every row of a section lines up. A blank cell keeps its column.
+         */
+        fun row(name: String, cells: List<Cell> = emptyList(), p: TextPaint = body, x0: Float = indent) {
+            var x = right
+            val spots = cells.reversed().map { cell ->
+                val unitW = p.measureText(cell.unit)
+                val spot = Triple(cell, x - unitW, x - unitW - 10f)
+                x -= unitW + 10f + cell.numW + 26f
+                spot
+            }
+            val l = layoutOf(name, p, (x - x0).coerceAtLeast(260f))
             c?.let {
-                it.save(); it.translate(indent, y); l.draw(it); it.restore()
-                if (value.isNotBlank()) it.drawText(value, right - body.measureText(value), y + l.getLineBaseline(0), body)
+                it.save(); it.translate(x0, y); l.draw(it); it.restore()
+                val base = y + l.getLineBaseline(0)
+                spots.forEach { (cell, unitX, numRight) ->
+                    if (cell.num.isNotEmpty()) { it.drawText(cell.unit, unitX, base, p); it.drawText(cell.num, numRight - p.measureText(cell.num), base, p) }
+                }
             }
             y += l.height + 8f
         }
@@ -144,35 +159,41 @@ private fun renderDay(d: Day, parts: Set<String>, withMoney: Boolean): Bitmap {
             gap(10f)
             when (key) {
                 "att" -> {
-                    row("到 ${d.att.count { it.factor > 0 }} 人", if (withMoney) "工资 ${money(d.labor)} 元" else "")
+                    row("到 ${d.att.count { it.factor > 0 }} 人" + if (withMoney) "，工资" else "", if (withMoney) listOf(Cell(money(d.labor), "元")) else emptyList())
                     val half = d.att.filter { it.factor > 0 && it.factor < 1 }
                     val off = d.att.filter { it.factor == 0.0 }
-                    if (half.isNotEmpty()) row("半天：" + half.joinToString("、") { it.name }, "")
-                    if (off.isNotEmpty()) row("没来：" + off.joinToString("、") { it.name }, "")
+                    if (half.isNotEmpty()) row("半天：" + half.joinToString("、") { it.name })
+                    if (off.isNotEmpty()) row("没来：" + off.joinToString("、") { it.name })
                 }
                 "haul" -> {
-                    d.hauls.forEach { h -> row(h.resourceName + if (h.driverName.isNotBlank()) "（${h.driverName}）" else "", "${money(h.tons)} 吨   ${h.trips} 车") }
-                    if (d.hauls.size > 1) rightLine("共 ${money(d.hauls.sumOf { it.tons })} 吨")
+                    d.hauls.forEach { h -> row(h.resourceName + if (h.driverName.isNotBlank()) "（${h.driverName}）" else "", listOf(Cell(money(h.tons), "吨", 190f), Cell("${h.trips}", "车", 50f))) }
+                    if (d.hauls.size > 1) row("共", listOf(Cell(money(d.hauls.sumOf { it.tons }), "吨", 190f), Cell("${d.hauls.sumOf { it.trips }}", "车", 50f)), bold)
                 }
                 "fuel" -> {
                     val list = d.entries.filter { it.kind == "fuel" }
                     val prices = list.mapNotNull { it.price }.distinct()
                     val same = prices.size == 1 && list.all { it.price != null }
+                    val showAmt = withMoney && !same
                     list.forEach { e ->
-                        row(e.resourceName.ifBlank { e.note.ifBlank { name } }, "${money(e.qty ?: 0.0)} 升" + if (withMoney && !same) "   ${money(e.amount)} 元" else "")
+                        row(e.resourceName.ifBlank { e.note.ifBlank { name } }, listOfNotNull(Cell(money(e.qty ?: 0.0), "升", 190f), if (showAmt) Cell(money(e.amount), "元", 200f) else null))
                     }
                     gap(4f)
-                    rightLine((if (withMoney && same) "${money(prices[0])} 元/升    " else "") + "共 ${money(list.sumOf { it.qty ?: 0.0 })} 升")
-                    if (withMoney) rightLine("合计：${money(list.sumOf { it.amount })} 元", strong)
+                    val litres = money(list.sumOf { it.qty ?: 0.0 })
+                    val sum = money(list.sumOf { it.amount })
+                    when {
+                        showAmt -> row("合计", listOf(Cell(litres, "升", 190f), Cell(sum, "元", 200f)), bold)
+                        withMoney -> { row("共（油价 ${money(prices[0])} 元/升）", listOf(Cell(litres, "升", 190f))); row("金额合计", listOf(Cell(sum, "元", 200f)), bold) }
+                        else -> row("共", listOf(Cell(litres, "升", 190f)), bold)
+                    }
                 }
                 else -> {
                     val list = d.entries.filter { it.kind == key }
                     list.forEach { e ->
                         val who = if (key == "other" || key == "hired") e.note.ifBlank { name } else e.resourceName.ifBlank { e.note.ifBlank { name } } +
                             if (e.resourceName.isNotBlank() && e.note.isNotBlank()) "（${e.note}）" else ""
-                        row(who, if (withMoney) "${money(e.amount)} 元" else "")
+                        row(who, if (withMoney) listOf(Cell(money(e.amount), "元", 200f)) else emptyList())
                     }
-                    if (withMoney && list.size > 1) { gap(4f); rightLine("合计：${money(list.sumOf { it.amount })} 元", strong) }
+                    if (withMoney && list.size > 1) { gap(4f); row("合计", listOf(Cell(money(list.sumOf { it.amount }), "元", 200f)), bold) }
                 }
             }
             gap(30f)
@@ -180,7 +201,7 @@ private fun renderDay(d: Day, parts: Set<String>, withMoney: Boolean): Bitmap {
         if (withMoney && "total" in parts) {
             c?.drawLine(pad, y, right, y, paint(2f).apply { strokeWidth = 3f })
             gap(22f)
-            rightLine("当天合计：${money(d.total)} 元", paint(52f, true))
+            row("当天合计", listOf(Cell(money(d.total), "元", 260f)), paint(52f, true), pad)
         }
         return y + 48f
     }
