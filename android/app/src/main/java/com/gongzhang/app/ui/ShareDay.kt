@@ -32,6 +32,9 @@ import com.gongzhang.app.Vm
 import com.gongzhang.app.data.*
 
 /** What can go into a shared day, in the order of the page. */
+/** The three figures of a fuel line, each can be left out. 单价 and 金额 are money, so 带上金额 off hides them too. */
+private val FUEL_OPTS = listOf("qty" to "升数", "price" to "每升单价", "amt" to "金额")
+
 private val PARTS = listOf("att" to "出勤", "fuel" to "加油", "haul" to "吨数", "repair" to "维修费", "hired" to "外雇车", "other" to "其他费用", "overtime" to "加班费")
 
 private fun hasPart(d: Day, key: String) = when (key) {
@@ -41,7 +44,7 @@ private fun hasPart(d: Day, key: String) = when (key) {
 }
 
 /** The day as plain text in the layout the handwritten note uses: date, then numbered sections. 带金额 off leaves the money out. */
-fun dayText(d: Day, parts: Set<String>, withMoney: Boolean): String = buildString {
+fun dayText(d: Day, parts: Set<String>, withMoney: Boolean, fuel: Set<String> = setOf("qty", "price", "amt")): String = buildString {
     append(cnDate(d.date))
     var n = 0
     fun head(name: String) { n++; append("\n$n、$name：") }
@@ -63,17 +66,14 @@ fun dayText(d: Day, parts: Set<String>, withMoney: Boolean): String = buildStrin
             }
             "fuel" -> {
                 val list = d.entries.filter { it.kind == "fuel" }
-                val prices = list.mapNotNull { it.price }.distinct()
-                val same = prices.size == 1 && list.all { it.price != null }
-                list.forEach { e ->
-                    append("\n${e.resourceName.ifBlank { e.note.ifBlank { name } }}  ${money(e.qty ?: 0.0)} 升")
-                    if (withMoney && !same) append("  ${money(e.amount)} 元")
-                }
-                val tail = mutableListOf<String>()
-                if (withMoney && same) tail += "${money(prices[0])} 元/升"
-                tail += "共 ${money(list.sumOf { it.qty ?: 0.0 })} 升"
-                if (withMoney) tail += "合计：${money(list.sumOf { it.amount })} 元"
-                append("\n" + tail.joinToString("  "))
+                fun line(who: String, qty: Double, price: Double?, amt: Double) = listOfNotNull(
+                    "$who".takeIf { it.isNotEmpty() },
+                    if ("qty" in fuel) "${money(qty)} 升" else null,
+                    if (withMoney && "price" in fuel && price != null) "${money(price)} 元/升" else null,
+                    if (withMoney && "amt" in fuel) "${money(amt)} 元" else null,
+                ).joinToString("  ")
+                list.forEach { e -> val l = e.qty ?: 0.0; append("\n" + line(e.resourceName.ifBlank { e.note.ifBlank { name } }, l, e.price ?: if (l > 0) e.amount / l else null, e.amount)) }
+                append("\n" + line("合计", list.sumOf { it.qty ?: 0.0 }, list.mapNotNull { it.price }.distinct().singleOrNull(), list.sumOf { it.amount }))
             }
             else -> {
                 val list = d.entries.filter { it.kind == key }
@@ -94,16 +94,16 @@ fun dayText(d: Day, parts: Set<String>, withMoney: Boolean): String = buildStrin
  * The day drawn like the handwritten sheet: date on top, numbered sections, names on the left and amounts on the right,
  * plain black on white. WeChat shows it as a picture, so the columns stay straight (text in a chat bubble cannot do that).
  */
-private class Cell(val num: String, val unit: String, val numW: Float = 200f)
+private class Cell(val num: String, val unit: String, val numW: Float = 240f)
 
-private fun renderDay(d: Day, parts: Set<String>, withMoney: Boolean): Bitmap {
-    val w = 1080
-    val pad = 64f
+private fun renderDay(d: Day, parts: Set<String>, withMoney: Boolean, fuel: Set<String>): Bitmap {
+    val w = 1560
+    val pad = 80f
     val ink = 0xFF1A1A1A.toInt()
     fun paint(size: Float, bold: Boolean = false) = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = size; color = ink; typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT }
-    val body = paint(44f); val strong = paint(44f, true); val head = paint(48f, true); val title = paint(68f, true)
+    val body = paint(56f); val strong = paint(56f, true); val head = paint(60f, true); val title = paint(86f, true)
     val right = w - pad
-    val indent = pad + 36f
+    val indent = pad + 44f
     val bold = strong
 
     fun layoutOf(s: String, p: TextPaint, width: Float) = StaticLayout.Builder.obtain(s, 0, s.length, p, width.toInt()).setLineSpacing(0f, 1.1f).build()
@@ -166,34 +166,33 @@ private fun renderDay(d: Day, parts: Set<String>, withMoney: Boolean): Bitmap {
                     if (off.isNotEmpty()) row("没来：" + off.joinToString("、") { it.name })
                 }
                 "haul" -> {
-                    d.hauls.forEach { h -> row(h.resourceName + if (h.driverName.isNotBlank()) "（${h.driverName}）" else "", listOf(Cell(money(h.tons), "吨", 190f), Cell("${h.trips}", "车", 50f))) }
-                    if (d.hauls.size > 1) row("共", listOf(Cell(money(d.hauls.sumOf { it.tons }), "吨", 190f), Cell("${d.hauls.sumOf { it.trips }}", "车", 50f)), bold)
+                    d.hauls.forEach { h -> row(h.resourceName + if (h.driverName.isNotBlank()) "（${h.driverName}）" else "", listOf(Cell(money(h.tons), "吨", 220f), Cell("${h.trips}", "车", 60f))) }
+                    if (d.hauls.size > 1) row("共", listOf(Cell(money(d.hauls.sumOf { it.tons }), "吨", 220f), Cell("${d.hauls.sumOf { it.trips }}", "车", 60f)), bold)
                 }
                 "fuel" -> {
                     val list = d.entries.filter { it.kind == "fuel" }
-                    val prices = list.mapNotNull { it.price }.distinct()
-                    val same = prices.size == 1 && list.all { it.price != null }
-                    val showAmt = withMoney && !same
+                    val q = "qty" in fuel; val pr = withMoney && "price" in fuel; val am = withMoney && "amt" in fuel
+                    fun cells(qty: Double, price: Double?, amt: Double) = listOfNotNull(
+                        if (q) Cell(money(qty), "升", 170f) else null,
+                        if (pr) Cell(price?.let { money(it) }.orEmpty(), "元/升", 130f) else null,
+                        if (am) Cell(money(amt), "元", 240f) else null,
+                    )
                     list.forEach { e ->
-                        row(e.resourceName.ifBlank { e.note.ifBlank { name } }, listOfNotNull(Cell(money(e.qty ?: 0.0), "升", 190f), if (showAmt) Cell(money(e.amount), "元", 200f) else null))
+                        val litres = e.qty ?: 0.0
+                        row(e.resourceName.ifBlank { e.note.ifBlank { name } }, cells(litres, e.price ?: if (litres > 0) e.amount / litres else null, e.amount))
                     }
                     gap(4f)
-                    val litres = money(list.sumOf { it.qty ?: 0.0 })
-                    val sum = money(list.sumOf { it.amount })
-                    when {
-                        showAmt -> row("合计", listOf(Cell(litres, "升", 190f), Cell(sum, "元", 200f)), bold)
-                        withMoney -> { row("共（油价 ${money(prices[0])} 元/升）", listOf(Cell(litres, "升", 190f))); row("金额合计", listOf(Cell(sum, "元", 200f)), bold) }
-                        else -> row("共", listOf(Cell(litres, "升", 190f)), bold)
-                    }
+                    val prices = list.mapNotNull { it.price }.distinct()
+                    row(if (q && !pr && !am) "共" else "合计", cells(list.sumOf { it.qty ?: 0.0 }, prices.singleOrNull()?.takeIf { list.all { e -> e.price != null } }, list.sumOf { it.amount }), bold)
                 }
                 else -> {
                     val list = d.entries.filter { it.kind == key }
                     list.forEach { e ->
                         val who = if (key == "other" || key == "hired") e.note.ifBlank { name } else e.resourceName.ifBlank { e.note.ifBlank { name } } +
                             if (e.resourceName.isNotBlank() && e.note.isNotBlank()) "（${e.note}）" else ""
-                        row(who, if (withMoney) listOf(Cell(money(e.amount), "元", 200f)) else emptyList())
+                        row(who, if (withMoney) listOf(Cell(money(e.amount), "元", 240f)) else emptyList())
                     }
-                    if (withMoney && list.size > 1) { gap(4f); row("合计", listOf(Cell(money(list.sumOf { it.amount }), "元", 200f)), bold) }
+                    if (withMoney && list.size > 1) { gap(4f); row("合计", listOf(Cell(money(list.sumOf { it.amount }), "元", 240f)), bold) }
                 }
             }
             gap(30f)
@@ -201,7 +200,7 @@ private fun renderDay(d: Day, parts: Set<String>, withMoney: Boolean): Bitmap {
         if (withMoney && "total" in parts) {
             c?.drawLine(pad, y, right, y, paint(2f).apply { strokeWidth = 3f })
             gap(22f)
-            row("当天合计", listOf(Cell(money(d.total), "元", 260f)), paint(52f, true), pad)
+            row("当天合计", listOf(Cell(money(d.total), "元", 320f)), paint(66f, true), pad)
         }
         return y + 48f
     }
@@ -221,13 +220,14 @@ fun ShareDayDialog(vm: Vm, onDismiss: () -> Unit) {
     val prefs = remember { context.getSharedPreferences("share", Context.MODE_PRIVATE) }
     val all = PARTS.map { it.first } + "total"
     val picked = remember {
-        mutableStateMapOf<String, Boolean>().also { m -> all.forEach { m[it] = prefs.getBoolean(it, true) } }
+        mutableStateMapOf<String, Boolean>().also { m -> (all + FUEL_OPTS.map { "fuel.${it.first}" }).forEach { m[it] = prefs.getBoolean(it, true) } }
     }
     var withMoney by remember { mutableStateOf(prefs.getBoolean("money", true)) }
     val parts = all.filter { picked[it] == true && (it == "total" || hasPart(d, it)) }.toSet()
-    val image = remember(d, parts, withMoney) { renderDay(d, parts, withMoney) }
+    val fuelOpts = FUEL_OPTS.map { it.first }.filter { picked["fuel.$it"] == true }.toSet()
+    val image = remember(d, parts, withMoney, fuelOpts) { renderDay(d, parts, withMoney, fuelOpts) }
 
-    fun remember() = prefs.edit().apply { all.forEach { putBoolean(it, picked[it] == true) }; putBoolean("money", withMoney) }.apply()
+    fun remember() = prefs.edit().apply { picked.forEach { (k, v) -> putBoolean(k, v) }; putBoolean("money", withMoney) }.apply()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -237,6 +237,10 @@ fun ShareDayDialog(vm: Vm, onDismiss: () -> Unit) {
                 Muted("勾上要发的内容；没记的项目不会发。")
                 PARTS.filter { hasPart(d, it.first) }.forEach { (key, name) ->
                     TickRow(name, picked[key] == true) { picked[key] = it }
+                    if (key == "fuel" && picked["fuel"] == true) FUEL_OPTS.forEach { (k, label) ->
+                        val needMoney = k != "qty"
+                        TickRow(label, picked["fuel.$k"] == true && (!needMoney || withMoney), enabled = !needMoney || withMoney, indent = 36.dp, small = true) { picked["fuel.$k"] = it }
+                    }
                 }
                 if (PARTS.none { hasPart(d, it.first) }) Muted("这一天还没有记录。")
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
@@ -269,7 +273,7 @@ fun ShareDayDialog(vm: Vm, onDismiss: () -> Unit) {
             Row {
                 TextButton(onClick = {
                     remember()
-                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("工账", dayText(d, parts, withMoney)))
+                    (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("工账", dayText(d, parts, withMoney, fuelOpts)))
                     vm.message = "文字已复制，去微信里粘贴"
                     onDismiss()
                 }) { Text("复制文字", fontSize = 16.sp) }
@@ -280,9 +284,9 @@ fun ShareDayDialog(vm: Vm, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun TickRow(label: String, on: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(enabled = enabled) { onChange(!on) }, verticalAlignment = Alignment.CenterVertically) {
+private fun TickRow(label: String, on: Boolean, enabled: Boolean = true, indent: androidx.compose.ui.unit.Dp = 0.dp, small: Boolean = false, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = indent).clickable(enabled = enabled) { onChange(!on) }, verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked = on, onCheckedChange = { onChange(it) }, enabled = enabled)
-        Text(label, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+        Text(label, fontSize = if (small) 16.sp else 18.sp, fontWeight = if (small) FontWeight.Normal else FontWeight.Medium)
     }
 }
