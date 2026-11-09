@@ -81,7 +81,13 @@ class Vm(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun refresh() { viewModelScope.launch { sync(); checkUpdate(force = true) } }
+    fun refresh() { viewModelScope.launch { refreshAddresses(); sync(); checkUpdate(force = true) } }
+
+    /** Re-reads the home's address table (so a server that moved, or a machine with a new IP, is found) and starts the next request from the top of the list. */
+    suspend fun refreshAddresses() {
+        withContext(Dispatchers.IO) { EndpointTable.init(ctx); EndpointTable.refreshNow() }
+        Api.forget()
+    }
 
     /** Sends the queue, then replaces the local copy with the server's (plus anything queued meanwhile). True = in step with the server. */
     suspend fun sync(): Boolean {
@@ -103,7 +109,7 @@ class Vm(app: Application) : AndroidViewModel(app) {
                 lastSync = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"))
                 true
             } catch (e: ApiError) {
-                if (e.code == 401) loggedIn = false else if (e.code == 0) offline = true else message = e.message
+                if (e.code == 401) loggedIn = false else if (e.code == 0) { offline = true; EndpointTable.refreshInBackground(force = true) } else message = e.message
                 false
             } catch (e: Exception) {
                 offline = true
@@ -132,7 +138,7 @@ class Vm(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             syncing = true
             try {
-                if (server.isNotBlank()) Prefs.setServer(ctx, server)
+                Prefs.setServer(ctx, server)
                 val o = Api.obj(ctx, "POST", "/login", JSONObject().put("username", username.trim()).put("password", password))
                 Prefs.setLogin(ctx, o.getString("token"), o.getString("username"))
                 user = o.getString("username"); loggedIn = true; tab = 0

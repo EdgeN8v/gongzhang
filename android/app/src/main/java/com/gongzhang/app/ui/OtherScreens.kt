@@ -303,7 +303,8 @@ fun MeScreen(vm: Vm) {
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SectionCard(null, "当前账号") {
                 Text(vm.user, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Muted("服务器 ${Prefs.server(context)}")
+                Muted("服务器 ${Api.base(context).trimEnd('/')}")
+                Muted("地址表 v${EndpointTable.version()}（下拉刷新会重新识别）")
                 Muted(vm.syncText.ifBlank { "还没同步" })
             }
             SectionCard(null, "更新") {
@@ -331,9 +332,9 @@ fun MeScreen(vm: Vm) {
         }
     }
     if (server) {
-        var addr by remember { mutableStateOf(Prefs.server(context)) }
-        FormDialog("服务器地址", { server = false }, onSave = { Prefs.setServer(context, addr); vm.message = "已保存"; server = false }) {
-            TextField2("地址", addr, { addr = it }); Muted("一般不用改。例如 http://192.168.1.10:8100/")
+        var addr by remember { mutableStateOf(Prefs.customServer(context).orEmpty()) }
+        FormDialog("服务器地址", { server = false }, onSave = { Prefs.setServer(context, addr); Api.forget(); vm.message = if (addr.isBlank()) "已改回自动识别" else "已保存"; server = false }) {
+            TextField2("地址", addr, { addr = it }); Muted("一般留空：自动用家里的地址表，两台机器和两个域名自动切换。只有要指定某个地址时才填，例如 http://192.168.1.10:8100/")
         }
     }
 }

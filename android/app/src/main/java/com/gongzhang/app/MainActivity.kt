@@ -79,7 +79,7 @@ private fun Root(vm: Vm) {
 @Composable
 private fun LoginScreen(vm: Vm) {
     val context = LocalContext.current
-    var server by remember { mutableStateOf(Prefs.server(context)) }
+    var server by remember { mutableStateOf(Prefs.customServer(context).orEmpty()) }
     var user by remember { mutableStateOf(Prefs.user(context)) }
     var pass by remember { mutableStateOf("") }
     var showServer by remember { mutableStateOf(false) }
@@ -93,7 +93,7 @@ private fun LoginScreen(vm: Vm) {
                 TextField2("用户名", user, { user = it })
                 OutlinedTextField(pass, { pass = it }, label = { Text("密码") }, singleLine = true, visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), textStyle = MaterialTheme.typography.bodyLarge, modifier = Modifier.fillMaxWidth())
-                if (showServer) TextField2("服务器地址", server, { server = it })
+                if (showServer) { TextField2("服务器地址（一般留空，自动识别）", server, { server = it }) }
                 BigButton(if (vm.syncing) "登录中…" else "登录") { if (!vm.syncing) vm.login(server, user, pass) }
                 TextButton(onClick = { showServer = !showServer }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(if (showServer) "收起" else "服务器地址", fontSize = 14.sp) }
             }

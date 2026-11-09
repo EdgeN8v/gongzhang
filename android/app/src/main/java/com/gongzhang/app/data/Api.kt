@@ -18,9 +18,10 @@ class ApiError(message: String, val code: Int = 0) : Exception(message)
 /** Server address, login token and the tiny bit of state the app keeps on the phone. */
 object Prefs {
     private fun sp(c: Context) = c.getSharedPreferences("gongzhang", Context.MODE_PRIVATE)
-    fun server(c: Context): String = sp(c).getString("server", null) ?: BuildConfig.DEFAULT_SERVER
-    fun setServer(c: Context, v: String) = sp(c).edit().putString("server", normalize(v)).apply()
-    fun lan(c: Context): String = sp(c).getString("lan", null) ?: BuildConfig.LAN_SERVER
+    /** A hand-typed server address, or null: the app then follows the home address table. The old built-in domain no longer exists, so an address saved from it is ignored. */
+    fun customServer(c: Context): String? =
+        sp(c).getString("server", null)?.takeIf { it.isNotBlank() && "npqq12.senkin.dpdns.org" !in it }?.let { normalize(it) }
+    fun setServer(c: Context, v: String) = sp(c).edit().apply { if (v.isBlank()) remove("server") else putString("server", normalize(v)) }.apply()
     fun token(c: Context): String = sp(c).getString("token", "") ?: ""
     fun user(c: Context): String = sp(c).getString("user", "") ?: ""
     fun setLogin(c: Context, token: String, user: String) = sp(c).edit().putString("token", token).putString("user", user).apply()
@@ -34,8 +35,9 @@ object Prefs {
 }
 
 /**
- * Talks to the server on the NAS. Tries the public address first and the home-network address second, so the app works both
- * at the workplace and at home on the same Wi-Fi as the NAS.
+ * Talks to the server. Where it is comes from the home's address table (EndpointTable): two home-network addresses
+ * (Orange Pi, NAS) and two internet ones, home first, so the app works at home and away and follows the server from one
+ * machine to the other. The address that answered last is tried first; a failed round re-reads the table.
  */
 object Api {
     private val JSON = "application/json; charset=utf-8".toMediaType()
@@ -43,17 +45,31 @@ object Api {
         .connectTimeout(6, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).writeTimeout(20, TimeUnit.SECONDS).build()
     @Volatile private var working: String? = null
 
-    fun bases(c: Context): List<String> {
-        val list = listOfNotNull(working, Prefs.server(c), Prefs.lan(c)).map { Prefs.normalize(it) }.filter { it.isNotEmpty() }
-        return list.distinct()
+    private fun isHome(base: String): Boolean = Regex("""^https?://(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)""").containsMatchIn(base)
+
+    /** Every address to try, in order, with how long to wait for a connection (short for home addresses, longer for the internet). */
+    fun bases(c: Context): List<Pair<String, Int>> {
+        EndpointTable.init(c)
+        EndpointTable.refreshInBackground()
+        val table = EndpointTable.candidates().map { Prefs.normalize(it.first) to it.second }
+        fun ms(b: String) = table.firstOrNull { it.first == b }?.second ?: if (isHome(b)) EndpointTable.LOCAL_MS else EndpointTable.EXTERNAL_MS
+        val first = listOfNotNull(working, Prefs.customServer(c)).map { it to ms(it) }
+        return (first + table).filter { it.first.isNotEmpty() }.distinctBy { it.first }
     }
 
+    fun clientFor(connectMs: Int): OkHttpClient = http.newBuilder().connectTimeout(connectMs.toLong(), TimeUnit.MILLISECONDS).build()
+
+    fun noteWorking(base: String) { working = base }
+
+    /** Drops the remembered address (the table was re-read): the next call starts from the top of the list. */
+    fun forget() { working = null }
+
     /** The address that answered last, for links like the Excel download. */
-    fun base(c: Context): String = working ?: bases(c).first()
+    fun base(c: Context): String = working ?: bases(c).first().first
 
     suspend fun call(c: Context, method: String, path: String, body: JSONObject? = null): Any = withContext(Dispatchers.IO) {
         var lastError: IOException? = null
-        for (base in bases(c)) {
+        for ((base, ms) in bases(c)) {
             val req = Request.Builder().url(base.trimEnd('/') + "/api" + path).apply {
                 val t = Prefs.token(c)
                 if (t.isNotEmpty()) header("Authorization", "Bearer $t")
@@ -61,7 +77,7 @@ object Api {
                 method(method, rb)
             }.build()
             try {
-                http.newCall(req).execute().use { resp ->
+                clientFor(ms).newCall(req).execute().use { resp ->
                     working = base
                     val text = resp.body?.string().orEmpty()
                     if (!resp.isSuccessful) {
@@ -75,6 +91,8 @@ object Api {
                 lastError = e
             }
         }
+        working = null
+        EndpointTable.refreshInBackground(force = true)
         throw ApiError("连不上服务器，请检查网络" + (lastError?.message?.let { " ($it)" } ?: ""))
     }
 

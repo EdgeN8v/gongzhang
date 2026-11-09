@@ -34,8 +34,8 @@ object AppUpdater {
 
     private fun get(context: Context, path: String): okhttp3.Response {
         var last: IOException? = null
-        for (base in Api.bases(context)) {
-            try { return Api.http.newCall(Request.Builder().url(base.trimEnd('/') + path).build()).execute() } catch (e: IOException) { last = e }
+        for ((base, ms) in Api.bases(context)) {
+            try { return Api.clientFor(ms).newCall(Request.Builder().url(base.trimEnd('/') + path).build()).execute().also { Api.noteWorking(base) } } catch (e: IOException) { last = e }
         }
         throw last ?: IOException("连不上服务器")
     }

@@ -147,6 +147,7 @@ fun PullRefresh(vm: Vm, modifier: Modifier = Modifier, content: @Composable () -
     val state = rememberPullToRefreshState()
     if (state.isRefreshing) {
         LaunchedEffect(Unit) {
+            vm.refreshAddresses()
             vm.sync()
             vm.checkUpdate(force = true)
             state.endRefresh()

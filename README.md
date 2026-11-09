@@ -56,3 +56,10 @@ cd ../android && ./gradlew assembleDebug      # 模拟器里服务器地址填 h
 - 断网时先存在手机里、联网后补传（现在没网记不了账）。
 - 记录"工资已发/未发"、预支。
 - 历史数据（8 月的几张表）没有导入，只导了人员和工资。
+
+## 现在的运行方式（2026-11）
+
+- 服务器跑在香橙派上（HomeHub 管理，NAS 是备用，香橙派坏了 NAS 会自动接管）。
+- App **不写死服务器地址**：它读家里 HomeHub 的地址表（`gongzhang` 一项：两个内网 IP + 两个外网域名），先试内网、再试外网，一个不通换下一个；机器换了 IP、服务搬了家，地址表会自己更新，App 不用升级。下拉刷新会重新读一遍地址表。"我的"页能看到当前用的地址和地址表版本。登录页"服务器地址"留空就是自动识别。
+- 发版：改 `android/app/build.gradle.kts` 的 versionCode/versionName → `python tools/release.py "改了什么"` → `python tools/publish.py`（把 APK 和 version.json 放进香橙派上的服务；`tools/nas.py` 是服务在 NAS 上时的老办法）。手机下次打开自动弹更新。
+
