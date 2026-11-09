@@ -81,12 +81,13 @@ class Vm(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun refresh() { viewModelScope.launch { refreshAddresses(); sync(); checkUpdate(force = true) } }
+    fun refresh() { viewModelScope.launch { sync(); checkUpdate(force = true) } }
 
-    /** Re-reads the home's address table (so a server that moved, or a machine with a new IP, is found) and starts the next request from the top of the list. */
-    suspend fun refreshAddresses() {
+    /** The 我的 page's re-check button: re-reads the home's address table, then walks the addresses until one answers. Null = none does. */
+    suspend fun recheckAddress(): String? {
         withContext(Dispatchers.IO) { EndpointTable.init(ctx); EndpointTable.refreshNow() }
-        Api.forget()
+        Api.forget(ctx)
+        return Api.probe(ctx)
     }
 
     /** Sends the queue, then replaces the local copy with the server's (plus anything queued meanwhile). True = in step with the server. */

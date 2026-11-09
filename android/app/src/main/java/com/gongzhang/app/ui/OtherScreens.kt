@@ -298,13 +298,21 @@ fun MeScreen(vm: Vm) {
     var server by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<UpdateInfo?>(null) }
     var status by remember { mutableStateOf("") }
+    var address by remember { mutableStateOf(Api.base(context)) }
+    var checking by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         PageHeader("我的", "账号和更新")
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SectionCard(null, "当前账号") {
                 Text(vm.user, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Muted("服务器 ${Api.base(context).trimEnd('/')}")
-                Muted("地址表 v${EndpointTable.version()}（下拉刷新会重新识别）")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Muted("服务器 ${address.trimEnd('/')}", Modifier.weight(1f))
+                    IconButton(onClick = {
+                        if (!checking) { checking = true; scope.launch { address = vm.recheckAddress()?.let { it } ?: "连不上，换个网络再试"; checking = false } }
+                    }, modifier = Modifier.size(40.dp)) {
+                        if (checking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Text("↻", fontSize = 22.sp, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
                 Muted(vm.syncText.ifBlank { "还没同步" })
             }
             SectionCard(null, "更新") {
@@ -332,9 +340,17 @@ fun MeScreen(vm: Vm) {
         }
     }
     if (server) {
-        var addr by remember { mutableStateOf(Prefs.customServer(context).orEmpty()) }
-        FormDialog("服务器地址", { server = false }, onSave = { Prefs.setServer(context, addr); Api.forget(); vm.message = if (addr.isBlank()) "已改回自动识别" else "已保存"; server = false }) {
-            TextField2("地址", addr, { addr = it }); Muted("一般留空：自动用家里的地址表，两台机器和两个域名自动切换。只有要指定某个地址时才填，例如 http://192.168.1.10:8100/")
+        val current = Api.base(context)
+        var addr by remember { mutableStateOf(current) }
+        FormDialog("服务器地址", { server = false }, onSave = {
+            val typed = addr.trim().let { if (it.isEmpty()) it else Prefs.normalize(it) }
+            when {
+                typed == current -> vm.message = "没有改动"
+                else -> { Prefs.setServer(context, typed); Api.forget(context); address = Api.base(context); vm.message = if (typed.isEmpty()) "已改回自动识别" else "已保存" }
+            }
+            server = false
+        }) {
+            TextField2("地址", addr, { addr = it }); Muted("这是现在用的地址。一般不用改：不改就是自动识别，连不通时按家里的地址表（两台机器、两个域名）挨个换。清空后保存 = 改回自动识别。")
         }
     }
 }

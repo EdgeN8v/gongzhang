@@ -21,6 +21,9 @@ object Prefs {
     /** A hand-typed server address, or null: the app then follows the home address table. The old built-in domain no longer exists, so an address saved from it is ignored. */
     fun customServer(c: Context): String? =
         sp(c).getString("server", null)?.takeIf { it.isNotBlank() && "npqq12.senkin.dpdns.org" !in it }?.let { normalize(it) }
+    /** The address that answered last time: tried first on the next start, so a server that does not move is found at once. */
+    fun lastOk(c: Context): String? = sp(c).getString("last_ok", null)?.takeIf { it.isNotBlank() }
+    fun setLastOk(c: Context, v: String?) = sp(c).edit().apply { if (v == null) remove("last_ok") else putString("last_ok", v) }.apply()
     fun setServer(c: Context, v: String) = sp(c).edit().apply { if (v.isBlank()) remove("server") else putString("server", normalize(v)) }.apply()
     fun token(c: Context): String = sp(c).getString("token", "") ?: ""
     fun user(c: Context): String = sp(c).getString("user", "") ?: ""
@@ -53,19 +56,33 @@ object Api {
         EndpointTable.refreshInBackground()
         val table = EndpointTable.candidates().map { Prefs.normalize(it.first) to it.second }
         fun ms(b: String) = table.firstOrNull { it.first == b }?.second ?: if (isHome(b)) EndpointTable.LOCAL_MS else EndpointTable.EXTERNAL_MS
-        val first = listOfNotNull(working, Prefs.customServer(c)).map { it to ms(it) }
+        val first = listOfNotNull(working ?: Prefs.lastOk(c), Prefs.customServer(c)).map { it to ms(it) }
         return (first + table).filter { it.first.isNotEmpty() }.distinctBy { it.first }
     }
 
     fun clientFor(connectMs: Int): OkHttpClient = http.newBuilder().connectTimeout(connectMs.toLong(), TimeUnit.MILLISECONDS).build()
 
-    fun noteWorking(base: String) { working = base }
+    fun noteWorking(c: Context, base: String) {
+        if (base != working) Prefs.setLastOk(c, base)
+        working = base
+    }
 
-    /** Drops the remembered address (the table was re-read): the next call starts from the top of the list. */
-    fun forget() { working = null }
+    /** Drops the remembered address: the next call starts from the top of the list. */
+    fun forget(c: Context) { working = null; Prefs.setLastOk(c, null) }
 
-    /** The address that answered last, for links like the Excel download. */
+    /** The address in use (the one that answered last), for links like the Excel download and the 我的 page. */
     fun base(c: Context): String = working ?: bases(c).first().first
+
+    /** Walks the addresses in order and keeps the first one whose /health answers. Null = none does. */
+    suspend fun probe(c: Context): String? = withContext(Dispatchers.IO) {
+        for ((base, ms) in bases(c)) {
+            try {
+                val ok = clientFor(ms).newCall(Request.Builder().url(base.trimEnd('/') + "/health").build()).execute().use { it.isSuccessful }
+                if (ok) { noteWorking(c, base); return@withContext base }
+            } catch (_: IOException) {}
+        }
+        null
+    }
 
     suspend fun call(c: Context, method: String, path: String, body: JSONObject? = null): Any = withContext(Dispatchers.IO) {
         var lastError: IOException? = null
@@ -78,7 +95,7 @@ object Api {
             }.build()
             try {
                 clientFor(ms).newCall(req).execute().use { resp ->
-                    working = base
+                    noteWorking(c, base)
                     val text = resp.body?.string().orEmpty()
                     if (!resp.isSuccessful) {
                         val detail = try { JSONObject(text).optString("detail") } catch (_: Exception) { "" }
