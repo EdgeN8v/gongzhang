@@ -32,13 +32,7 @@ object AppUpdater {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
     } catch (e: Exception) { "" }
 
-    private fun get(context: Context, path: String): okhttp3.Response {
-        var last: IOException? = null
-        for ((base, ms) in Api.bases(context)) {
-            try { return Api.clientFor(ms).newCall(Request.Builder().url(base.trimEnd('/') + path).build()).execute().also { Api.noteWorking(context, base) } } catch (e: IOException) { last = e }
-        }
-        throw last ?: IOException("连不上服务器")
-    }
+    private suspend fun get(context: Context, path: String): okhttp3.Response = Api.rawGet(context, path)
 
     /** The newer release the server offers, or null if this app is already current / the server has none. */
     suspend fun check(context: Context): UpdateInfo? = withContext(Dispatchers.IO) {

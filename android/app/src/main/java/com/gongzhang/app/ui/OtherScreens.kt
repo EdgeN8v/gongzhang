@@ -298,7 +298,7 @@ fun MeScreen(vm: Vm) {
     var server by remember { mutableStateOf(false) }
     var update by remember { mutableStateOf<UpdateInfo?>(null) }
     var status by remember { mutableStateOf("") }
-    var address by remember { mutableStateOf(Api.base(context)) }
+    var checkNote by remember { mutableStateOf("") }
     var checking by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         PageHeader("我的", "账号和更新")
@@ -306,9 +306,9 @@ fun MeScreen(vm: Vm) {
             SectionCard(null, "当前账号") {
                 Text(vm.user, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Muted("服务器 ${address.trimEnd('/')}", Modifier.weight(1f))
+                    Muted("服务器 ${(Api.current ?: Api.base(context)).trimEnd('/')}" + checkNote, Modifier.weight(1f))
                     IconButton(onClick = {
-                        if (!checking) { checking = true; scope.launch { address = vm.recheckAddress()?.let { it } ?: "连不上，换个网络再试"; checking = false } }
+                        if (!checking) { checking = true; checkNote = ""; scope.launch { if (vm.recheckAddress() == null) checkNote = "  连不上，换个网络再试"; checking = false } }
                     }, modifier = Modifier.size(40.dp)) {
                         if (checking) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Text("↻", fontSize = 22.sp, color = MaterialTheme.colorScheme.primary)
                     }
@@ -346,7 +346,7 @@ fun MeScreen(vm: Vm) {
             val typed = addr.trim().let { if (it.isEmpty()) it else Prefs.normalize(it) }
             when {
                 typed == current -> vm.message = "没有改动"
-                else -> { Prefs.setServer(context, typed); Api.forget(context); address = Api.base(context); vm.message = if (typed.isEmpty()) "已改回自动识别" else "已保存" }
+                else -> { Prefs.setServer(context, typed); Api.forget(context); vm.message = if (typed.isEmpty()) "已改回自动识别" else "已保存" }
             }
             server = false
         }) {

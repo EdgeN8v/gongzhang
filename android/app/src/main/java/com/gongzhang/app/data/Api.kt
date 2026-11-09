@@ -2,7 +2,13 @@ package com.gongzhang.app.data
 
 import android.content.Context
 import com.gongzhang.app.BuildConfig
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -49,15 +55,18 @@ object Api {
     @Volatile private var working: String? = null
 
     private fun isHome(base: String): Boolean = Regex("""^https?://(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)""").containsMatchIn(base)
+    private fun waitMs(base: String) = if (isHome(base)) EndpointTable.LOCAL_MS else EndpointTable.EXTERNAL_MS
 
-    /** Every address to try, in order, with how long to wait for a connection (short for home addresses, longer for the internet). */
-    fun bases(c: Context): List<Pair<String, Int>> {
+    /** The address in use, as state: the 我的 page shows it and follows when the app switches to the other machine. */
+    var current by mutableStateOf<String?>(null)
+        private set
+
+    /** The table's addresses in order (home first), with a hand-typed one in front. */
+    private fun ordered(c: Context): List<Pair<String, Int>> {
         EndpointTable.init(c)
         EndpointTable.refreshInBackground()
         val table = EndpointTable.candidates().map { Prefs.normalize(it.first) to it.second }
-        fun ms(b: String) = table.firstOrNull { it.first == b }?.second ?: if (isHome(b)) EndpointTable.LOCAL_MS else EndpointTable.EXTERNAL_MS
-        val first = listOfNotNull(working ?: Prefs.lastOk(c), Prefs.customServer(c)).map { it to ms(it) }
-        return (first + table).filter { it.first.isNotEmpty() }.distinctBy { it.first }
+        return (listOfNotNull(Prefs.customServer(c)).map { it to waitMs(it) } + table).filter { it.first.isNotEmpty() }.distinctBy { it.first }
     }
 
     fun clientFor(connectMs: Int): OkHttpClient = http.newBuilder().connectTimeout(connectMs.toLong(), TimeUnit.MILLISECONDS).build()
@@ -65,52 +74,88 @@ object Api {
     fun noteWorking(c: Context, base: String) {
         if (base != working) Prefs.setLastOk(c, base)
         working = base
+        current = base
     }
 
-    /** Drops the remembered address: the next call starts from the top of the list. */
-    fun forget(c: Context) { working = null; Prefs.setLastOk(c, null) }
+    /** Drops the remembered address. */
+    fun forget(c: Context) { working = null; current = null; Prefs.setLastOk(c, null) }
 
-    /** The address in use (the one that answered last), for links like the Excel download and the 我的 page. */
-    fun base(c: Context): String = working ?: bases(c).first().first
+    /** The address in use (the one that answered last), for links like the Excel download. */
+    fun base(c: Context): String = working ?: Prefs.lastOk(c) ?: ordered(c).first().first
 
-    /** Walks the addresses in order and keeps the first one whose /health answers. Null = none does. */
-    suspend fun probe(c: Context): String? = withContext(Dispatchers.IO) {
-        for ((base, ms) in bases(c)) {
-            try {
-                val ok = clientFor(ms).newCall(Request.Builder().url(base.trimEnd('/') + "/health").build()).execute().use { it.isSuccessful }
-                if (ok) { noteWorking(c, base); return@withContext base }
-            } catch (_: IOException) {}
+    private val probeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private fun healthy(base: String, ms: Int): Boolean = try {
+        clientFor(ms).newCall(Request.Builder().url(base.trimEnd('/') + "/health").build()).execute().use { it.isSuccessful && it.body?.string().orEmpty().contains("\"ok\"") }
+    } catch (_: IOException) { false }
+
+    /**
+     * Asks every address at the same time whether the server answers there, and takes the first one in table order that does
+     * (home before internet, the machine the service runs on first). So a machine that is switched off or no longer has the
+     * service costs one short wait, not one wait per address. Null = none answers.
+     */
+    suspend fun pick(c: Context, skip: String? = null): String? {
+        val list = ordered(c).filter { it.first != skip }
+        val probes = list.map { (base, ms) -> probeScope.async { healthy(base, minOf(ms, 3000)) } }
+        for ((i, probe) in probes.withIndex()) {
+            if (probe.await()) {
+                probes.forEach { it.cancel() }
+                noteWorking(c, list[i].first)
+                return list[i].first
+            }
         }
-        null
+        return null
     }
 
-    suspend fun call(c: Context, method: String, path: String, body: JSONObject? = null): Any = withContext(Dispatchers.IO) {
+    /**
+     * Runs [run] on the address in use. If it cannot be reached - or answers like a leftover proxy (502/503/504) because the
+     * service has moved - looks for another address once and runs it there.
+     */
+    private suspend fun <T> withServer(c: Context, run: (String, OkHttpClient) -> T): T = withContext(Dispatchers.IO) {
+        var base = working ?: Prefs.customServer(c) ?: Prefs.lastOk(c) ?: pick(c)
+        var switched = false
         var lastError: IOException? = null
-        for ((base, ms) in bases(c)) {
-            val req = Request.Builder().url(base.trimEnd('/') + "/api" + path).apply {
-                val t = Prefs.token(c)
-                if (t.isNotEmpty()) header("Authorization", "Bearer $t")
-                val rb = (body?.toString() ?: if (method == "GET") null else "{}")?.toRequestBody(JSON)
-                method(method, rb)
-            }.build()
+        while (base != null) {
             try {
-                clientFor(ms).newCall(req).execute().use { resp ->
-                    noteWorking(c, base)
-                    val text = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) {
-                        val detail = try { JSONObject(text).optString("detail") } catch (_: Exception) { "" }
-                        if (resp.code == 401 && path != "/login") Prefs.logout(c)
-                        throw ApiError(detail.ifBlank { "服务器出错了 (${resp.code})" }, resp.code)
-                    }
-                    return@withContext if (text.startsWith("[")) JSONArray(text) else JSONObject(text)
-                }
+                return@withContext run(base, clientFor(waitMs(base)))
             } catch (e: IOException) {
                 lastError = e
+                if (switched) break
+                switched = true
+                base = pick(c, skip = base)
             }
         }
         working = null
         EndpointTable.refreshInBackground(force = true)
         throw ApiError("连不上服务器，请检查网络" + (lastError?.message?.let { " ($it)" } ?: ""))
+    }
+
+    /** A plain GET (no login), for the app updater. The caller closes the response. */
+    suspend fun rawGet(c: Context, path: String): okhttp3.Response = withServer(c) { base, client ->
+        val resp = client.newCall(Request.Builder().url(base.trimEnd('/') + path).build()).execute()
+        if (resp.code in 502..504) { resp.close(); throw IOException("HTTP ${resp.code}") }
+        noteWorking(c, base)
+        resp
+    }
+
+    suspend fun call(c: Context, method: String, path: String, body: JSONObject? = null): Any = withServer(c) { base, client ->
+        val req = Request.Builder().url(base.trimEnd('/') + "/api" + path).apply {
+            val t = Prefs.token(c)
+            if (t.isNotEmpty()) header("Authorization", "Bearer $t")
+            val rb = (body?.toString() ?: if (method == "GET") null else "{}")?.toRequestBody(JSON)
+            method(method, rb)
+        }.build()
+        client.newCall(req).execute().use { resp ->
+            if (resp.code in 502..504) throw IOException("HTTP ${resp.code}")
+            noteWorking(c, base)
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                val detail = try { JSONObject(text).optString("detail") } catch (_: Exception) { "" }
+                if (resp.code == 401 && path != "/login") Prefs.logout(c)
+                throw ApiError(detail.ifBlank { "服务器出错了 (${resp.code})" }, resp.code)
+            }
+            if (text.startsWith("[")) JSONArray(text) else JSONObject(text)
+        }
     }
 
     suspend fun obj(c: Context, method: String, path: String, body: JSONObject? = null) = call(c, method, path, body) as JSONObject

@@ -87,7 +87,7 @@ class Vm(app: Application) : AndroidViewModel(app) {
     suspend fun recheckAddress(): String? {
         withContext(Dispatchers.IO) { EndpointTable.init(ctx); EndpointTable.refreshNow() }
         Api.forget(ctx)
-        return Api.probe(ctx)
+        return Api.pick(ctx)
     }
 
     /** Sends the queue, then replaces the local copy with the server's (plus anything queued meanwhile). True = in step with the server. */
